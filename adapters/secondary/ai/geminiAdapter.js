@@ -11,6 +11,7 @@ export class GeminiAdapter extends AIPort {
   constructor() {
     super();
     this.geminiKey = process.env.GEMINI_API_KEY;
+    this.modelName = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
 
     if (this.geminiKey) {
       this.genAI = new GoogleGenerativeAI(this.geminiKey);
@@ -22,7 +23,7 @@ export class GeminiAdapter extends AIPort {
   async generateContent(prompt) {
     if (this.genAI) {
       try {
-        const model = await this.genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+        const model = await this.genAI.getGenerativeModel({ model: this.modelName });
         const result = await model.generateContent(prompt);
         return result.response.text();
       } catch (err) {
@@ -123,7 +124,7 @@ No incluyas texto adicional, solo el JSON.`;
 
     try {
       const model = await this.genAI.getGenerativeModel({
-        model: 'gemini-1.5-flash',
+        model: this.modelName,
         generationConfig: {
           responseMimeType: 'application/json'
         }
