@@ -68,9 +68,10 @@ export class ParserPort {
   /**
    * Extrae texto plano de un archivo (PDF o Docx).
    * @param {string} filePath Ruta al archivo
+   * @param {string} originalName Nombre original del archivo (opcional)
    * @returns {Promise<string>} Texto extraído
    */
-  async extractText(filePath) {
+  async extractText(filePath, originalName = '') {
     throw new Error('Method not implemented: extractText');
   }
 }

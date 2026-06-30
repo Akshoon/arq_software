@@ -28,7 +28,7 @@ export class BibliographyProcessorService extends BibliographyProcessorPort {
       console.log(`\n[CoreService] Procesando archivo: ${file.originalName}`);
       try {
         // 1. Extraer texto usando ParserPort
-        const text = await this.parserPort.extractText(file.filePath);
+        const text = await this.parserPort.extractText(file.filePath, file.originalName);
 
         // 2. Extraer asignatura, plan y semestre usando AIPort
         const { subject, plan, semester } = await this.aiPort.extractSubjectDetails(text);

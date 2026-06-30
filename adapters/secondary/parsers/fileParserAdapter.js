@@ -5,12 +5,12 @@ import mammoth from 'mammoth';
 import { ParserPort } from '../../../core/ports/ports.js';
 
 export class FileParserAdapter extends ParserPort {
-  async extractText(filePath) {
+  async extractText(filePath, originalName = '') {
     if (!fs.existsSync(filePath)) {
       throw new Error(`El archivo no existe: ${filePath}`);
     }
 
-    const ext = path.extname(filePath).toLowerCase();
+    const ext = (path.extname(originalName) || path.extname(filePath)).toLowerCase();
 
     if (ext === '.pdf') {
       const dataBuffer = fs.readFileSync(filePath);

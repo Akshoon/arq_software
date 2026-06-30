@@ -4,7 +4,19 @@ import fs from 'fs';
 import path from 'path';
 import { createObjectCsvWriter } from 'csv-writer';
 
-const upload = multer({ dest: 'uploads_node/' });
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    if (!fs.existsSync('uploads_node')) {
+      fs.mkdirSync('uploads_node', { recursive: true });
+    }
+    cb(null, 'uploads_node/');
+  },
+  filename: (req, file, cb) => {
+    const ext = path.extname(file.originalname);
+    cb(null, `${Date.now()}-${Math.round(Math.random() * 1E9)}${ext}`);
+  }
+});
+const upload = multer({ storage });
 
 export function createExpressRouter(processorService) {
   const router = express.Router();
