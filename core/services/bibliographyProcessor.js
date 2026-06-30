@@ -24,29 +24,47 @@ export class BibliographyProcessorService extends BibliographyProcessorPort {
   async processFiles(files, facultad = 'Ciencias Sociales', carreraDefault = 'Trabajo Social') {
     const results = [];
 
+    // ── PASO 1: Extraer texto de todos los archivos sin llamadas API ──────────
+    console.log(`\n[CoreService] Extrayendo texto de ${files.length} archivo(s)...`);
+    const preparedFiles = [];
     for (const file of files) {
-      console.log(`\n[CoreService] Procesando archivo: ${file.originalName}`);
       try {
-        // 1. Extraer texto usando ParserPort
-        const text = await this.parserPort.extractText(file.filePath, file.originalName);
+        const extractedText = await this.parserPort.extractText(file.filePath, file.originalName);
+        preparedFiles.push({ ...file, extractedText });
+      } catch (err) {
+        console.error(`[CoreService] Error extrayendo texto de ${file.originalName}:`, err.message);
+        results.push({ file: file.originalName, status: 'ERROR', error: err.message });
+      }
+    }
 
-        // 2+4. UNA sola llamada a la API: extrae asignatura + bibliografía en conjunto
-        const aiResult = await this.aiPort.analyzeDocument
-          ? await this.aiPort.analyzeDocument(file.filePath, file.originalName, text)
-          : null;
+    if (!preparedFiles.length) return results;
 
-        // Datos de asignatura (de IA o fallback heurístico)
+    // ── PASO 2: UNA sola llamada API para analizar TODO el lote ──────────────
+    let batchResults = null;
+    if (this.aiPort.analyzeBatch) {
+      console.log(`[CoreService] Analizando lote completo (${preparedFiles.length} archivos) en 1 llamada API...`);
+      batchResults = await this.aiPort.analyzeBatch(preparedFiles);
+    }
+
+    // ── PASO 3: Persistir resultados por cada archivo ─────────────────────────
+    for (let i = 0; i < preparedFiles.length; i++) {
+      const file = preparedFiles[i];
+      console.log(`\n[CoreService] Persistiendo: ${file.originalName}`);
+      try {
+        const aiResult = batchResults?.[i] || null;
+
+        // Datos de asignatura (de IA o fallback heurístico local)
         let subject, plan, semester;
         if (aiResult) {
           ({ subject, plan, semester } = aiResult);
         } else {
-          ({ subject, plan, semester } = await this.aiPort.extractSubjectDetails(text));
+          ({ subject, plan, semester } = await this.aiPort.extractSubjectDetails(file.extractedText));
         }
 
         const asignaturaNombre = subject || file.originalName.replace(/\.[^/.]+$/, '');
         console.log(`    Asignatura: ${asignaturaNombre} | Carrera: ${carreraDefault} | Plan: ${plan}`);
 
-        // 3. Registrar Carrera y Asignatura en persistencia mediante RepositoryPort
+        // Registrar Carrera y Asignatura en persistencia
         const career = await this.repositoryPort.getOrCreateCareer(carreraDefault, facultad);
         const subjectEntity = await this.repositoryPort.getOrCreateSubject(
           asignaturaNombre,
@@ -55,13 +73,13 @@ export class BibliographyProcessorService extends BibliographyProcessorPort {
           semester || ''
         );
 
-        // 4. Obtener referencias bibliográficas (ya extraídas en el mismo paso de IA)
+        // Referencias bibliográficas (de IA o fallback heurístico)
         let rawEntries = aiResult?.references || [];
         if (!rawEntries.length) {
-          console.log(`    [Respaldo Heurístico] Extrayendo referencias bibliográficas locales...`);
-          rawEntries = this.extractBibliographyEntries(text);
+          console.log(`    [Respaldo Heurístico] Extrayendo referencias locales...`);
+          rawEntries = this.extractBibliographyEntries(file.extractedText);
         }
-        console.log(`    Entradas detectadas en documento: ${rawEntries.length}`);
+        console.log(`    Referencias encontradas: ${rawEntries.length}`);
 
         for (const raw of rawEntries) {
           const norm = raw.isNormalizedByAI
