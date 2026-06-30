@@ -50,6 +50,17 @@ export class AIPort {
   async normalizeEntry(author, title) {
     throw new Error('Method not implemented: normalizeEntry');
   }
+
+  /**
+   * Extrae todas las referencias bibliográficas estructuradas directamente desde el archivo o texto.
+   * @param {string} filePath Ruta del archivo
+   * @param {string} originalName Nombre original
+   * @param {string} extractedText Texto extraído (para docx o si no es pdf)
+   * @returns {Promise<Array<object>|null>} Array de referencias o null si falla
+   */
+  async extractBibliography(filePath, originalName, extractedText) {
+    throw new Error('Method not implemented: extractBibliography');
+  }
 }
 
 export class ScraperPort {

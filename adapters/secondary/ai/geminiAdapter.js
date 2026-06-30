@@ -1,4 +1,6 @@
 import { GoogleGenerativeAI } from '@google/generative-ai';
+import fs from 'fs';
+import path from 'path';
 import { AIPort } from '../../../core/ports/ports.js';
 
 /**
@@ -91,5 +93,77 @@ export class GeminiAdapter extends AIPort {
       normalizedTitle: cleanTitle || title,
       language: 'Español'
     };
+  }
+
+  async extractBibliography(filePath, originalName, extractedText) {
+    if (!this.genAI) {
+      return null;
+    }
+
+    const ext = (path.extname(originalName) || path.extname(filePath)).toLowerCase();
+    const isPdf = ext === '.pdf';
+
+    const prompt = `Actúa como un experto en catalogación bibliográfica universitaria.
+Extrae todas las referencias bibliográficas del siguiente documento y devuélvelas como un array JSON.
+REGLAS CRÍTICAS:
+1. Extrae únicamente las referencias de la sección formal de Bibliografía, Referencias Bibliográficas, Lecturas Obligatorias o Complementarias al final del documento o en apartados específicos.
+2. IGNORA absolutamente las citas breves en el cuerpo del texto (ej. "(Pérez, 2020)"). No mezcles ni inventes entradas a partir de citas en texto.
+3. Devuelve solo un array JSON con estos campos exactos:
+[
+  {
+    "author": "Nombre normalizado del autor o autores",
+    "title": "Título completo de la obra o artículo",
+    "year": "Año de publicación (ej. 2020) o vacío",
+    "publisher": "Editorial, revista o URL",
+    "url": null,
+    "typeBib": "básica" | "complementaria"
+  }
+]
+No incluyas texto adicional, solo el JSON.`;
+
+    try {
+      const model = await this.genAI.getGenerativeModel({
+        model: 'gemini-1.5-flash',
+        generationConfig: {
+          responseMimeType: 'application/json'
+        }
+      });
+
+      let result;
+      if (isPdf && fs.existsSync(filePath)) {
+        console.log(`    [Gemini Multimodal] Enviando PDF directamente a Gemini 1.5 Flash...`);
+        const fileBuffer = fs.readFileSync(filePath);
+        const pdfPart = {
+          inlineData: {
+            data: fileBuffer.toString('base64'),
+            mimeType: 'application/pdf'
+          }
+        };
+        result = await model.generateContent([prompt, pdfPart]);
+      } else {
+        console.log(`    [Gemini Text] Enviando texto extraído a Gemini 1.5 Flash...`);
+        result = await model.generateContent([
+          prompt + `\n\n--- DOCUMENTO ---\n` + (extractedText || '').substring(0, 60000)
+        ]);
+      }
+
+      const rawText = result.response.text();
+      const jsonStr = rawText.replace(/```json\s*|\s*```/g, '').trim();
+      const entries = JSON.parse(jsonStr);
+      if (Array.isArray(entries)) {
+        return entries.map(e => ({
+          author: (e.author || 'Autor Desconocido').substring(0, 100),
+          title: (e.title || 'Título No Especifcado').substring(0, 150),
+          year: String(e.year || '').replace(/\D/g, '').substring(0, 4),
+          publisher: e.publisher || '',
+          url: e.url || null,
+          typeBib: (e.typeBib || 'básica').toLowerCase().includes('comp') ? 'complementaria' : 'básica',
+          isNormalizedByAI: true
+        }));
+      }
+    } catch (err) {
+      console.warn('⚠ Error en extracción bibliográfica multimodal de Gemini:', err.message);
+    }
+    return null;
   }
 }

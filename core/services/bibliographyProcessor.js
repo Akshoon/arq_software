@@ -44,13 +44,21 @@ export class BibliographyProcessorService extends BibliographyProcessorPort {
           semester || ''
         );
 
-        // 4. Extraer citas bibliográficas del texto
-        const rawEntries = this.extractBibliographyEntries(text);
+        // 4. Extraer citas bibliográficas (Multimodal directo si es PDF o texto si es Docx)
+        let rawEntries = await this.aiPort.extractBibliography(file.filePath, file.originalName, text);
+        if (!rawEntries || rawEntries.length === 0) {
+          console.log(`    [Respaldo Heurístico] Extrayendo referencias bibliográficas locales...`);
+          rawEntries = this.extractBibliographyEntries(text);
+        }
         console.log(`    Entradas detectadas en documento: ${rawEntries.length}`);
 
         for (const raw of rawEntries) {
-          console.log(`    Normalizando con IA: "${raw.author}" - "${raw.title}"`);
-          const norm = await this.aiPort.normalizeEntry(raw.author, raw.title);
+          const norm = raw.isNormalizedByAI
+            ? { normalizedAuthor: raw.author, normalizedTitle: raw.title, language: 'Español' }
+            : await this.aiPort.normalizeEntry(raw.author, raw.title);
+          if (!raw.isNormalizedByAI) {
+            console.log(`    Normalizando con IA: "${raw.author}" - "${raw.title}"`);
+          }
 
           // Buscar si ya existe el título
           let titleObj = await this.repositoryPort.findTitleByNormalized(
