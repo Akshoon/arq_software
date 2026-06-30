@@ -30,8 +30,19 @@ export class BibliographyProcessorService extends BibliographyProcessorPort {
         // 1. Extraer texto usando ParserPort
         const text = await this.parserPort.extractText(file.filePath, file.originalName);
 
-        // 2. Extraer asignatura, plan y semestre usando AIPort
-        const { subject, plan, semester } = await this.aiPort.extractSubjectDetails(text);
+        // 2+4. UNA sola llamada a la API: extrae asignatura + bibliografía en conjunto
+        const aiResult = await this.aiPort.analyzeDocument
+          ? await this.aiPort.analyzeDocument(file.filePath, file.originalName, text)
+          : null;
+
+        // Datos de asignatura (de IA o fallback heurístico)
+        let subject, plan, semester;
+        if (aiResult) {
+          ({ subject, plan, semester } = aiResult);
+        } else {
+          ({ subject, plan, semester } = await this.aiPort.extractSubjectDetails(text));
+        }
+
         const asignaturaNombre = subject || file.originalName.replace(/\.[^/.]+$/, '');
         console.log(`    Asignatura: ${asignaturaNombre} | Carrera: ${carreraDefault} | Plan: ${plan}`);
 
@@ -44,9 +55,9 @@ export class BibliographyProcessorService extends BibliographyProcessorPort {
           semester || ''
         );
 
-        // 4. Extraer citas bibliográficas (Multimodal directo si es PDF o texto si es Docx)
-        let rawEntries = await this.aiPort.extractBibliography(file.filePath, file.originalName, text);
-        if (!rawEntries || rawEntries.length === 0) {
+        // 4. Obtener referencias bibliográficas (ya extraídas en el mismo paso de IA)
+        let rawEntries = aiResult?.references || [];
+        if (!rawEntries.length) {
           console.log(`    [Respaldo Heurístico] Extrayendo referencias bibliográficas locales...`);
           rawEntries = this.extractBibliographyEntries(text);
         }
