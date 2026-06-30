@@ -5,57 +5,135 @@ import { AIPort } from '../../../core/ports/ports.js';
 
 /**
  * Adaptador Secundario de IA exclusivo para Google Gemini.
- * Optimizado para límites estrictos de rate (1 RPM / 20 RPD):
+ *
+ * Características clave:
+ * - Pool de API keys con rotación automática en caso de error (rate limit, cuota agotada).
  * - Un LOTE completo de archivos se analiza en UNA sola petición API.
- * - Throttle de 62s entre llamadas para respetar 1 RPM.
- * - Fallback heurístico local si no hay API key o se agota la cuota.
+ * - Throttle por key: 62s entre llamadas para respetar 1 RPM por cuenta.
+ * - Fallback heurístico local si todas las keys se agotan.
+ *
+ * Configuración en .env:
+ *   GEMINI_API_KEY=clave_principal
+ *   GEMINI_API_KEY_2=clave_respaldo_2
+ *   GEMINI_API_KEY_3=clave_respaldo_3
+ *   (puedes agregar tantas como quieras: GEMINI_API_KEY_4, etc.)
  */
 export class GeminiAdapter extends AIPort {
   constructor() {
     super();
-    this.geminiKey = process.env.GEMINI_API_KEY;
     this.modelName = process.env.GEMINI_MODEL || 'gemini-1.5-flash';
-    this._lastCallAt = 0;
 
-    if (this.geminiKey) {
-      this.genAI = new GoogleGenerativeAI(this.geminiKey);
-      console.log(`✓ [GeminiAdapter] Modelo: ${this.modelName} | Rate-limit: 1 RPM / 20 RPD`);
+    // ── Cargar pool de API keys ────────────────────────────────────────────────
+    // Recoge GEMINI_API_KEY, GEMINI_API_KEY_2, GEMINI_API_KEY_3, etc.
+    this._keys = this._loadApiKeys();
+    this._currentKeyIdx = 0;
+
+    if (this._keys.length === 0) {
+      console.warn('⚠ [GeminiAdapter] Ninguna GEMINI_API_KEY configurada. Modo heurístico local activo.');
     } else {
-      console.warn('⚠ Advertencia: GEMINI_API_KEY no está configurada en .env. Se utilizará heurística local de respaldo.');
+      console.log(`✓ [GeminiAdapter] ${this._keys.length} API key(s) cargadas | Modelo: ${this.modelName}`);
     }
   }
 
   /**
-   * Espera el tiempo necesario para respetar el límite de 1 RPM.
+   * Lee todas las keys de entorno y retorna un array de objetos:
+   * [{ key, genAI, lastCallAt, exhausted }]
    */
-  async _throttle() {
+  _loadApiKeys() {
+    const keyPool = [];
+
+    // Key principal
+    if (process.env.GEMINI_API_KEY) {
+      keyPool.push(this._createKeyEntry(process.env.GEMINI_API_KEY, 1));
+    }
+
+    // Keys de respaldo: GEMINI_API_KEY_2, GEMINI_API_KEY_3, ...
+    let idx = 2;
+    while (process.env[`GEMINI_API_KEY_${idx}`]) {
+      keyPool.push(this._createKeyEntry(process.env[`GEMINI_API_KEY_${idx}`], idx));
+      idx++;
+    }
+
+    return keyPool;
+  }
+
+  _createKeyEntry(key, num) {
+    return {
+      num,
+      key,
+      genAI: new GoogleGenerativeAI(key),
+      lastCallAt: 0,
+      exhausted: false
+    };
+  }
+
+  /**
+   * Retorna la key activa actual, o rota a la siguiente si la actual está agotada.
+   * Retorna null si todas las keys están agotadas.
+   */
+  _getActiveKey() {
+    for (let i = 0; i < this._keys.length; i++) {
+      const idx = (this._currentKeyIdx + i) % this._keys.length;
+      if (!this._keys[idx].exhausted) {
+        this._currentKeyIdx = idx;
+        return this._keys[idx];
+      }
+    }
+    return null; // todas agotadas
+  }
+
+  /**
+   * Marca la key actual como agotada y rota a la siguiente disponible.
+   */
+  _rotateKey(reason = 'error') {
+    const current = this._keys[this._currentKeyIdx];
+    console.warn(`    🔄 [Key Rotation] Key #${current.num} marcada como agotada (${reason}). Rotando a la siguiente...`);
+    current.exhausted = true;
+    this._currentKeyIdx = (this._currentKeyIdx + 1) % this._keys.length;
+  }
+
+  /**
+   * Espera el tiempo necesario para respetar 1 RPM en la key activa.
+   */
+  async _throttle(keyEntry) {
     const MIN_INTERVAL_MS = 62000;
-    const elapsed = Date.now() - this._lastCallAt;
-    if (this._lastCallAt > 0 && elapsed < MIN_INTERVAL_MS) {
+    const elapsed = Date.now() - keyEntry.lastCallAt;
+    if (keyEntry.lastCallAt > 0 && elapsed < MIN_INTERVAL_MS) {
       const wait = MIN_INTERVAL_MS - elapsed;
-      console.log(`    ⏳ [Rate Limit] Esperando ${Math.ceil(wait / 1000)}s para respetar 1 RPM...`);
+      console.log(`    ⏳ [Rate Limit Key #${keyEntry.num}] Esperando ${Math.ceil(wait / 1000)}s...`);
       await new Promise(r => setTimeout(r, wait));
     }
-    this._lastCallAt = Date.now();
+    keyEntry.lastCallAt = Date.now();
   }
 
   /**
-   * ★ MÉTODO PRINCIPAL: Analiza un LOTE completo de archivos en UNA sola llamada API.
-   *
-   * Acepta N archivos (PDF o docx) y retorna un array con el resultado de cada uno:
-   * [{ originalName, subject, plan, semester, references[] }, ...]
-   *
-   * - PDFs: se envían como inlineData base64 (multimodal nativo).
-   * - Docx/txt: su texto extraído se incluye como bloque de texto en el prompt.
-   * - 1 sola llamada API sin importar cuántos archivos haya en el lote.
+   * Determina si un error es de cuota/rate-limit (debe rotar key)
+   * o un error de otro tipo (puede reintentar con la misma).
+   */
+  _isQuotaError(err) {
+    const msg = err.message?.toLowerCase() || '';
+    return (
+      msg.includes('429') ||
+      msg.includes('quota') ||
+      msg.includes('rate limit') ||
+      msg.includes('resource_exhausted') ||
+      msg.includes('too many requests')
+    );
+  }
+
+  // ─── MÉTODO PRINCIPAL ──────────────────────────────────────────────────────
+
+  /**
+   * ★ Analiza un LOTE completo de archivos en UNA sola llamada API.
+   * Rota automáticamente entre keys si alguna falla por cuota/rate-limit.
    *
    * @param {Array<{filePath: string, originalName: string, extractedText: string}>} files
    * @returns {Promise<Array<object>|null>}
    */
   async analyzeBatch(files) {
-    if (!this.genAI || !files.length) return null;
+    if (this._keys.length === 0 || !files.length) return null;
 
-    const MAX_TEXT_CHARS = Math.floor(50000 / files.length); // distribuir tokens entre archivos
+    const MAX_TEXT_CHARS = Math.floor(50000 / files.length);
 
     const prompt = `Eres un experto en catalogación bibliográfica universitaria.
 Se te proporcionan ${files.length} documento(s) de programas de asignatura (syllabi) universitarios.
@@ -86,13 +164,12 @@ REGLAS CRÍTICAS:
 1. En "references" incluye ÚNICAMENTE entradas de secciones formales: Bibliografía, Referencias, Lecturas Obligatorias/Complementarias.
 2. IGNORA citas breves del cuerpo del texto como "(Pérez, 2020)".
 3. Clasifica "typeBib" como "básica" o "complementaria" según la sección.
-4. Para "faculty" y "career": extráelos del encabezado del documento. Si no están explícitos, infiere el área académica a partir del contenido. Si es imposible determinarlo, usa cadena vacía "".
+4. Para "faculty" y "career": extráelos del encabezado. Si no están explícitos, infiere el área académica. Si es imposible, usa "".
 5. Devuelve SOLO el array JSON, sin texto adicional ni markdown.
 6. El array debe tener exactamente ${files.length} elemento(s), uno por documento.`;
 
-    // Construir las partes del mensaje
+    // Construir partes del mensaje (reutilizable para todas las keys)
     const parts = [prompt];
-
     for (let i = 0; i < files.length; i++) {
       const { filePath, originalName, extractedText } = files[i];
       const ext = (path.extname(originalName) || path.extname(filePath)).toLowerCase();
@@ -108,63 +185,79 @@ REGLAS CRÍTICAS:
           }
         });
       } else {
-        // Para docx/txt incluimos el texto extraído
-        const snippet = (extractedText || '').substring(0, MAX_TEXT_CHARS);
-        parts.push(snippet);
+        parts.push((extractedText || '').substring(0, MAX_TEXT_CHARS));
       }
     }
 
-    try {
-      await this._throttle();
+    // ── Intentar con cada key disponible ────────────────────────────────────
+    let attempts = 0;
+    while (attempts < this._keys.length) {
+      const keyEntry = this._getActiveKey();
+      if (!keyEntry) {
+        console.error('❌ [GeminiAdapter] Todas las API keys están agotadas. Usando fallback heurístico.');
+        return null;
+      }
 
-      console.log(`    [Gemini Batch] Enviando ${files.length} archivo(s) en 1 sola llamada API...`);
+      try {
+        await this._throttle(keyEntry);
 
-      const model = this.genAI.getGenerativeModel({
-        model: this.modelName,
-        generationConfig: { responseMimeType: 'application/json' }
-      });
+        console.log(`    [Gemini Batch] Key #${keyEntry.num} | ${files.length} archivo(s) → 1 llamada API...`);
 
-      const result = await model.generateContent(parts);
-      const rawText = result.response.text();
-      const jsonStr = rawText.replace(/```json\s*|\s*```/g, '').trim();
-      const parsed = JSON.parse(jsonStr);
+        const model = keyEntry.genAI.getGenerativeModel({
+          model: this.modelName,
+          generationConfig: { responseMimeType: 'application/json' }
+        });
 
-      if (!Array.isArray(parsed)) return null;
+        const result = await model.generateContent(parts);
+        const rawText = result.response.text();
+        const jsonStr = rawText.replace(/```json\s*|\s*```/g, '').trim();
+        const parsed = JSON.parse(jsonStr);
 
-      return parsed.map((item, idx) => ({
-        originalName: item.originalName || files[idx]?.originalName || `doc_${idx}`,
-        faculty: item.faculty || '',
-        career: item.career || '',
-        subject: item.subject || null,
-        plan: item.plan || '2024',
-        semester: item.semester || 'I',
-        references: Array.isArray(item.references)
-          ? item.references.map(e => ({
-              author: (e.author || 'Autor Desconocido').substring(0, 100),
-              title: (e.title || 'Título no especificado').substring(0, 150),
-              year: String(e.year || '').replace(/\D/g, '').substring(0, 4),
-              publisher: e.publisher || '',
-              url: e.url || null,
-              typeBib: String(e.typeBib || 'básica').toLowerCase().includes('comp') ? 'complementaria' : 'básica',
-              isNormalizedByAI: true
-            }))
-          : []
-      }));
-    } catch (err) {
-      console.warn('⚠ [GeminiAdapter] Error en analyzeBatch:', err.message);
-      return null;
+        if (!Array.isArray(parsed)) return null;
+
+        console.log(`    ✅ [GeminiAdapter] Análisis exitoso con Key #${keyEntry.num}`);
+
+        return parsed.map((item, idx) => ({
+          originalName: item.originalName || files[idx]?.originalName || `doc_${idx}`,
+          faculty: item.faculty || '',
+          career: item.career || '',
+          subject: item.subject || null,
+          plan: item.plan || '2024',
+          semester: item.semester || 'I',
+          references: Array.isArray(item.references)
+            ? item.references.map(e => ({
+                author: (e.author || 'Autor Desconocido').substring(0, 100),
+                title: (e.title || 'Título no especificado').substring(0, 150),
+                year: String(e.year || '').replace(/\D/g, '').substring(0, 4),
+                publisher: e.publisher || '',
+                url: e.url || null,
+                typeBib: String(e.typeBib || 'básica').toLowerCase().includes('comp') ? 'complementaria' : 'básica',
+                isNormalizedByAI: true
+              }))
+            : []
+        }));
+
+      } catch (err) {
+        if (this._isQuotaError(err)) {
+          this._rotateKey(`cuota agotada: ${err.message.substring(0, 80)}`);
+          attempts++;
+        } else {
+          console.warn(`⚠ [GeminiAdapter] Error inesperado con Key #${keyEntry.num}:`, err.message);
+          return null;
+        }
+      }
     }
+
+    console.error('❌ [GeminiAdapter] Se agotaron todos los reintentos de API keys.');
+    return null;
   }
 
-  /**
-   * Compatibilidad: analiza un solo documento delegando a analyzeBatch.
-   */
+  // ─── Métodos de compatibilidad ─────────────────────────────────────────────
+
   async analyzeDocument(filePath, originalName, extractedText) {
     const results = await this.analyzeBatch([{ filePath, originalName, extractedText }]);
     return results?.[0] ?? null;
   }
-
-  // ─── Métodos fallback heurísticos (sin llamada API) ────────────────────────
 
   async extractSubjectDetails(text) {
     const subjMatch = text.match(/(?:asignatura|materia|curso)\s*:\s*([^\n\r]+)/i);
