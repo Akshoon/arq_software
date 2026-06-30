@@ -65,6 +65,8 @@ Estructura requerida para cada objeto (NO omitas ningún campo):
 {
   "documentIndex": 0,
   "originalName": "nombre del archivo tal como se indica",
+  "faculty": "Nombre de la Facultad o Unidad Académica a la que pertenece la asignatura",
+  "career": "Nombre completo de la Carrera o Programa al que pertenece la asignatura",
   "subject": "Nombre completo de la asignatura",
   "plan": "Año o código del plan de estudios (ej: 2024)",
   "semester": "Semestre o ciclo (ej: 1°, II)",
@@ -84,8 +86,9 @@ REGLAS CRÍTICAS:
 1. En "references" incluye ÚNICAMENTE entradas de secciones formales: Bibliografía, Referencias, Lecturas Obligatorias/Complementarias.
 2. IGNORA citas breves del cuerpo del texto como "(Pérez, 2020)".
 3. Clasifica "typeBib" como "básica" o "complementaria" según la sección.
-4. Devuelve SOLO el array JSON, sin texto adicional ni markdown.
-5. El array debe tener exactamente ${files.length} elemento(s), uno por documento.`;
+4. Para "faculty" y "career": extráelos del encabezado del documento. Si no están explícitos, infiere el área académica a partir del contenido. Si es imposible determinarlo, usa cadena vacía "".
+5. Devuelve SOLO el array JSON, sin texto adicional ni markdown.
+6. El array debe tener exactamente ${files.length} elemento(s), uno por documento.`;
 
     // Construir las partes del mensaje
     const parts = [prompt];
@@ -130,6 +133,8 @@ REGLAS CRÍTICAS:
 
       return parsed.map((item, idx) => ({
         originalName: item.originalName || files[idx]?.originalName || `doc_${idx}`,
+        faculty: item.faculty || '',
+        career: item.career || '',
         subject: item.subject || null,
         plan: item.plan || '2024',
         semester: item.semester || 'I',

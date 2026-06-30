@@ -359,21 +359,28 @@
     <% } %>
 
     <section class="glass-card">
+      <div style="margin-bottom: 1.5rem;">
+        <h2 style="font-size: 1.25rem; font-weight: 700; margin-bottom: 0.4rem;">Subir Syllabi para Procesar</h2>
+        <p style="font-size: 0.88rem; color: var(--text-muted);">
+          🤖 <strong style="color: var(--accent-cyan);">La IA detecta automáticamente</strong> la facultad, carrera, asignatura y plan desde el documento.
+          Los campos de abajo son solo un <em>respaldo</em> si el documento no contiene esa información explícita.
+        </p>
+      </div>
       <form action="/procesar" method="POST" enctype="multipart/form-data">
         <div class="form-group">
-          <label for="facultad">Facultad</label>
-          <input type="text" id="facultad" name="facultad" value="Ciencias Sociales" placeholder="Ej: Ciencias Sociales">
+          <label for="facultad">Facultad <span style="color: var(--text-muted); font-weight: 400;">(opcional — respaldo)</span></label>
+          <input type="text" id="facultad" name="facultad" value="" placeholder="Ej: Ciencias Sociales (autodetectado por IA)">
         </div>
 
         <div class="form-group">
-          <label for="carrera">Carrera por Defecto</label>
-          <input type="text" id="carrera" name="carrera" value="Trabajo Social" placeholder="Ej: Trabajo Social">
+          <label for="carrera">Carrera <span style="color: var(--text-muted); font-weight: 400;">(opcional — respaldo)</span></label>
+          <input type="text" id="carrera" name="carrera" value="" placeholder="Ej: Trabajo Social (autodetectado por IA)">
         </div>
 
         <div class="file-dropzone" id="dropzone">
           <span>📄</span>
           <h4 style="margin: 0.5rem 0;">Arrastra tus archivos de Syllabus (.pdf / .docx) o haz clic para explorar</h4>
-          <p style="font-size: 0.85rem; color: var(--text-muted);" id="file-label">Soporta múltiples documentos simultáneamente</p>
+          <p style="font-size: 0.85rem; color: var(--text-muted);" id="file-label">Soporta múltiples documentos simultáneamente — todos se procesan en 1 sola llamada IA</p>
           <input type="file" name="files" id="fileInput" multiple accept=".pdf,.docx,.doc">
         </div>
 

@@ -61,11 +61,15 @@ export class BibliographyProcessorService extends BibliographyProcessorPort {
           ({ subject, plan, semester } = await this.aiPort.extractSubjectDetails(file.extractedText));
         }
 
+        // Facultad y Carrera: priorizamos lo detectado por IA, fallback al formulario
+        const facultadFinal = aiResult?.faculty || facultad;
+        const carreraFinal  = aiResult?.career  || carreraDefault;
+
         const asignaturaNombre = subject || file.originalName.replace(/\.[^/.]+$/, '');
-        console.log(`    Asignatura: ${asignaturaNombre} | Carrera: ${carreraDefault} | Plan: ${plan}`);
+        console.log(`    Asignatura: ${asignaturaNombre} | Carrera: ${carreraFinal} | Facultad: ${facultadFinal} | Plan: ${plan}`);
 
         // Registrar Carrera y Asignatura en persistencia
-        const career = await this.repositoryPort.getOrCreateCareer(carreraDefault, facultad);
+        const career = await this.repositoryPort.getOrCreateCareer(carreraFinal, facultadFinal);
         const subjectEntity = await this.repositoryPort.getOrCreateSubject(
           asignaturaNombre,
           career.id,
